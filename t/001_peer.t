@@ -10,7 +10,6 @@ use t::Util qw(
 BEGIN {
     use_ok "Bitq::Torrent";
     use_ok "Bitq::Peer";
-    use_ok "Bitq::Protocol::BEP03", "build_handshake", "unpack_handshake";
 }
 
 my $peer = Test::TCP->new(code => sub {
@@ -47,8 +46,6 @@ my $peer = Test::TCP->new(code => sub {
                 Bitq::Torrent->create_from_file(__FILE__),
         );
 
-        is $peer->state, Bitq::Peer::ST_PLAINTEXT_HANDSHAKE_ONE(), "State starts at encrypted handshake";
-
         $cv->cb( sub { diag "Server existing";
             undef $client;
             undef $peer;
@@ -83,7 +80,6 @@ AnyEvent::Socket::tcp_connect( "127.0.0.1", $peer->port, sub {
         is $proto, "BitTorrent protocol";
         is $peer_id, "Mock Client";
 
-diag $infohash;
         $_[0]->push_write(
             build_handshake(
                 "dummy",

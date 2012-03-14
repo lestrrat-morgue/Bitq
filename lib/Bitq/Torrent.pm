@@ -38,6 +38,11 @@ use File::Spec;
 use Log::Minimal;
 use Bitq::Bencode ();
 
+has parent_dir => (
+    is => 'rw',
+    default => sub { Cwd::getcwd() },
+);
+
 has source => (
     is => 'rw',
 );
@@ -129,6 +134,11 @@ has bitfield => (
     is => 'rw',
 );
 
+sub path_to {
+    my ($self, @components) = @_;
+    File::Spec->catfile($self->parent_dir, @components);
+}
+
 sub files {
     my $self = shift;
     if (@_) {
@@ -164,7 +174,6 @@ sub read_piece {
             next;
         }
 
-infof "offset = %d, sofar = %d", $offset, $sofar;
 
         # sofar is at the end of current file. in order to backtrack to
         # the corret read location, we just need to subtract the offset
@@ -175,13 +184,11 @@ infof "offset = %d, sofar = %d", $offset, $sofar;
                 File::Spec->catfile( $self->source, @{ $info->{path}} ) :
                 $self->source
             ;
-            infof "Opened file %s", $file;
             open my $fh, '<', $file or
                 die "Failed to open file $file: $!";
             return $fh;
         };
 
-infof "seeking to %d", $offset - $sofar;
         my $fh = $open_fileinfo->( $fileinfo );
         seek $fh, $offset - $sofar, SEEK_END;
 
@@ -250,6 +257,9 @@ sub create_metadata {
         $data{info}->{files} = [ $self->generate_fileinfo ];
     }
 
+use Data::Dumper::Concise;
+warn Dumper(\%data);
+
     return \%data;
 }
 
@@ -259,10 +269,10 @@ sub generate_fileinfo {
 
     my @fileinfo;
     while ( my $file = shift @$files ) {
+        $file = $self->path_to($file);
         my (undef, $dirs, $filename) = File::Spec->splitpath($file);
-
         push @fileinfo, {
-            path => [ ( $dirs ? @$dirs : () ), $filename ],
+            path => [ ( $dirs ? File::Spec->splitdir($dirs) : () ), $filename ],
             length => -s $file,
         };
     }
@@ -278,6 +288,7 @@ sub generate_pieces {
     my @pieces;
     my $piece_length = $self->piece_length;
     while ( my $file = shift @$files ) {
+        $file = $self->path_to($file);
         open my $fh, '<', $file or die "Could not open file $file: $!";
 
         my $size = -s $fh;
@@ -322,6 +333,7 @@ sub create_from_file {
         @args,
         files     => [ File::Basename::basename( $file_abs ) ],
         source    => $file_abs,
+        parent_dir => $dir,
         completed => 1,
     );
     $t->compute_hash;
@@ -414,6 +426,8 @@ sub calc_bitfield {
     my ($self, $work_dir) = @_;
 
     my $metadata = Bitq::Bencode::bdecode($self->info_hash_raw);
+use Data::Dumper::Concise;
+warn Dumper($metadata);
     my $length   = $metadata->{info}->{length};
     my $p_length = $metadata->{info}->{"piece length"};
     my $p_count  = int($length / $p_length) + 1;
