@@ -10,8 +10,7 @@ use Bitq::Peer;
 use Bitq::Store;
 use Bitq::Tracker::PSGI;
 use Bitq::Bencode qw(bdecode);
-use Bitq::Protocol::BEP03 qw(build_handshake unpack_handshake);
-use Bitq::Protocol::BEP23 qw(uncompact_ipv4);
+use Bitq::Protocol qw(uncompact_ipv4);
 
 our $VERSION;
 our $MONIKER;
@@ -92,111 +91,6 @@ has store => (
     default => sub {
         my $self = shift;
         Bitq::Store->new( app => $self );
-    }
-);
-
-AnyEvent::Handle::register_read_type(
-    "bittorrent.packet" => sub {
-        my ($self, $cb) = @_;
-
-        my %state = (
-            len     => 0,
-            type    => 0,
-        );
-        sub {
-            if ( ! $state{len} ) {
-                # Check the first 4 bytes to figure out the length of the
-                # payload. The next byte contains 1 byte that describes the
-                # message type, then the payload. 
-                if ( length $_[0]{rbuf} < 5 ) {
-                    return;
-                }
-                my $preamble = bytes::substr( $_[0]{rbuf}, 0, 5, '' );
-                ($state{len}, $state{type}) = unpack "l c", $preamble;
-
-                # len contains the len for the type byte, so subtract that
-                $state{len} -= 1;
-            }
-
-            if ( length( $_[0]{rbuf} ) < $state{len} ) {
-                return;
-            }
-
-            my ($len, $type) = ($state{len}, $state{type});
-            my $buffer = bytes::substr( $_[0]{rbuf}, 0, $len, '' );
-            undef %state;
-
-            $cb->( $_[0], $type, $buffer );
-            return 1;
-        }
-    }
-);
-
-AnyEvent::Handle::register_read_type(
-    "bittorrent.handshake" => sub {
-        my ($self, $cb) = @_;
-
-        my %state = (
-            preamble => 0,
-        );
-        sub {
-            if ( ! $state{preamble} ) {
-                # Handshakes consiste of 69 bytes total. The first byte is 0x13
-                if ( !defined $_[0]{rbuf} || length $_[0]{rbuf} < 1 ) {
-                    return;
-                }
-
-                my $byte = substr $_[0]{rbuf}, 0, 1;
-                if ( unpack("c", $byte) != 0x13 ) {
-                    undef %state;
-                    critf "Expected 0x13 as first byte in stream, but got %s", unpack "c", $byte;
-                    $cb->($_[0], "Bad handshake");
-                    return 1;
-                }
-                $state{preamble} = 1;
-            }
-
-            if ( length $_[0]{rbuf} < 68 ) {
-                return;
-            }
-
-            # whippee we got 68 bytes
-            undef %state;
-            my @payload = unpack_handshake( substr $_[0]{rbuf}, 0, 68, '' );
-            $cb->( $_[0], @payload );
-            return 1;
-        }
-
-    }
-);
-
-AnyEvent::Handle::register_write_type(
-    "bittorrent.packet" => sub {
-        my ($self, $type, $string) = @_;
-        $string ||= '';
-
-        my $len = bytes::length($type) + bytes::length($string);
-        infof "Writing $type $string ($len bytes)";
-        return pack( "l c", $len, $type ) . $string;
-    }
-);
-
-AnyEvent::Handle::register_write_type(
-    "bittorrent.handshake" => sub {
-        my ($self, $reserved, $info_hash, $peer_id) = @_;
-
-        if (! defined $reserved) {
-            my @reserved = (0, 0, 0, 0, 0, 0, 0, 0);
-            $reserved[5] |= 0x10;    # Ext Protocol
-            $reserved[7] |= 0x04;    # Fast Ext
-            $reserved = join '', map {chr} @reserved;
-        }
-
-        return build_handshake(
-            $reserved,
-            $info_hash,
-            $peer_id,
-        );
     }
 );
 

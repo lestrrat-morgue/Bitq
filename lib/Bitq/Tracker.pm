@@ -3,7 +3,7 @@ use Mouse;
 use DBI;
 use SQL::Maker;
 use Log::Minimal;
-use Bitq::Protocol::BEP23 qw(compact_ipv4);
+use Bitq::Protocol qw(compact_ipv4);
 
 has app => (
     is => 'ro',

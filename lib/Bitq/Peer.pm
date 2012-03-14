@@ -6,7 +6,6 @@ package Bitq::Peer;
 use Mouse;
 use AnyEvent::Handle;
 use Fcntl qw(SEEK_SET);
-use Bitq::Protocol::BEP03 qw(build_handshake unpack_handshake);
 use Bitq::Torrent;
 use List::Util ();
 use Log::Minimal;
