@@ -50,10 +50,12 @@ sub to_app {
     };
 
     # XXX should be only on devel-ish env
-    foreach my $middleware ( qw( Lint StackTrace AccessLog ) ) {
-        my $klass = "Plack::Middleware::$middleware";
-        Mouse::Util::load_class( $klass );
-        $app = $klass->wrap( $app );
+    if ( ( $ENV{ PLACK_ENV } || '' ) eq 'development' ) {
+        foreach my $middleware ( qw( Lint StackTrace AccessLog ) ) {
+            my $klass = "Plack::Middleware::$middleware";
+            Mouse::Util::load_class( $klass );
+            $app = $klass->wrap( $app );
+        }
     }
 
     return $app;

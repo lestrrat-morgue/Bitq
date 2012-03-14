@@ -1,4 +1,5 @@
 use strict;
+use t::Util;
 use Test::More;
 use Test::TCP;
 use File::Basename ();
@@ -26,7 +27,7 @@ my $torrent = Bitq::Torrent->create_from_file(
     my $dest = File::Spec->catfile( $dir, "completed", File::Basename::basename( __FILE__ ) );
     my $source = __FILE__;
 
-    diag "Copying $source to $dest";
+    note "Copying $source to $dest";
     File::Path::make_path( File::Basename::dirname( $dest ) ) ;
     File::Copy::copy($source, $dest) or die "Could not copy";
     $torrent->write_torrent( "test.torrent" );
@@ -42,12 +43,20 @@ my $master = Test::TCP->new( code => sub {
     $master->start_tracker();
     $master->add_torrent( $torrent );
     my $cv = $master->start;
-    $cv->recv;
+
+    eval {
+        $cv->recv;
+    };
+    if ($@) {
+        diag "Error in master: $@";
+    }
+
 } );
 
 subtest 'check tracker sanity' => sub {
     my $url = URI->new(sprintf "http://127.0.0.1:13209/announce.pl", $master->port);
     $url->query_form( {
+        event => "started",
         info_hash => 'DUMMY',
         peer_id => 'DUMMY',
         key => 'DUMMY',
@@ -59,10 +68,11 @@ subtest 'check tracker sanity' => sub {
     }
 };
 
-diag "Starting leechers";
+note "Starting leechers";
 my @dirs;
 my @peers;
 foreach my $i ( 1..2 ) {
+    note "Starting leecher $i";
     my $dir = new_tempdir();
     push @dirs, $dir;
     push @peers, Test::TCP->new( code => sub {
@@ -71,7 +81,7 @@ foreach my $i ( 1..2 ) {
 
         my $client = Bitq->new(
             port => $port,
-            peer_id => sprintf("swarm-client%08", $i),
+            peer_id => sprintf("swarm-client%08d", $i),
             work_dir => $dir,
         );
         $client->add_torrent( $torrent );
@@ -84,11 +94,12 @@ diag "Wait";
 # wait until files are downloaded
 {
     local $SIG{ALRM} = sub { die "TiMeOuT" };
+    my $found = 0;
     eval {
-        a_larm(10);
+        alarm(10);
         CHECK: {
-            my $found = 0;
-            foreach my $path ( map { "$_/completed/t/100_swarm.t" } @dirs ) {
+            $found = 0;
+            foreach my $path ( map { "$_/100_swarm.t" } @dirs ) {
                 if (-f $path) {
                     $found++;
                 }
@@ -98,6 +109,11 @@ diag "Wait";
             }
         }
     };
+    if ($@) {
+        fail "Error before getting files: $@";
+    } else {
+        is $found, scalar @peers, "Found all files";
+    }
     alarm(0);
 }
 

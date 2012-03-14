@@ -152,11 +152,20 @@ sub files {
 sub read_piece {
     my ($self, $i, $begin, $length) = @_;
 
-    infof "Reading piece %d (begin %d, length %d)", $i, $begin, $length;
-    if (! $self->completed ) {
-        die "yikes";
+    debugf "Reading piece %d (begin %d, length %d)", $i, $begin, $length;
+    if ($self->completed ) {
+        return $self->read_piece_from_complete( $i, $begin, $length );
+    } else {
+        return $self->read_piece_from_incomplete( $i, $begin, $length );
     }
+}
 
+sub read_piece_from_incomplete {
+
+}
+
+sub read_piece_from_complete {
+    my ($self, $i, $begin, $length) = @_;
     my @fileinfo = @{$self->fileinfo};
     my $offset   = $i * $self->piece_length + $begin;
     my $sofar    = 0;
@@ -170,7 +179,7 @@ sub read_piece {
         $sofar += $fileinfo->{length};
         if ($offset > $sofar) {
             # not enough
-            infof "Looking for offset %d, current = %d", $offset, $sofar;
+            debugf "Looking for offset %d, current = %d", $offset, $sofar;
             next;
         }
 
@@ -256,9 +265,6 @@ sub create_metadata {
         $data{info}->{name}  = $self->dir;
         $data{info}->{files} = [ $self->generate_fileinfo ];
     }
-
-use Data::Dumper::Concise;
-warn Dumper(\%data);
 
     return \%data;
 }
@@ -426,20 +432,19 @@ sub calc_bitfield {
     my ($self, $work_dir) = @_;
 
     my $metadata = Bitq::Bencode::bdecode($self->info_hash_raw);
-use Data::Dumper::Concise;
-warn Dumper($metadata);
     my $length   = $metadata->{info}->{length};
     my $p_length = $metadata->{info}->{"piece length"};
     my $p_count  = int($length / $p_length) + 1;
     my $vec      = Bit::Vector->new( $p_count );
+    my $destfile = File::Spec->catfile( $work_dir, $self->info_hash );
 
+    debugf "Calculating bitfield for %s", $destfile;
     if ( $self->completed ) {
         $vec->Fill;
         $self->bitfield( $vec );
         return $vec;
     }
 
-    my $destfile = File::Spec->catfile( $work_dir, $self->info_hash );
     my $fh;
     if (! -f $destfile) {
         $vec->Empty();
@@ -459,18 +464,18 @@ warn Dumper($metadata);
         my $hash = substr $pieces, $h_offset, 20;
         $h_offset += 20;
         $v_offset++;
-        infof " + bitfield (%d)", $v_offset;
+        debugf " + bitfield (%d)", $v_offset;
 
         my $this_piece;
         my $n_read = read $fh, $this_piece, $p_length;
-        infof " + bitfield (%d): read %d bytes", $v_offset, $n_read;
+        debugf " + bitfield (%d): read %d bytes", $v_offset, $n_read;
         if ($n_read) {
             my $this_hash = Digest::SHA::sha1( $this_piece );
             if ( $this_hash eq $hash ) {
-                infof " + bitfield (%d): hash matches", $v_offset;
+                debugf " + bitfield (%d): hash matches", $v_offset;
                 $vec->Bit_On( $v_offset - 1 );
             } else {
-                infof " + bitfield (%d): hash did not match...", $v_offset;
+                debugf " + bitfield (%d): hash did not match...", $v_offset;
             }
         }
     }
@@ -503,7 +508,7 @@ sub unpack_completed {
             print $dest_fh $buf;
             $length -= $n_read;
         }
-        infof "Wrote to %s", $dest;
+        debugf "Wrote to %s", $dest;
     }
 }
 

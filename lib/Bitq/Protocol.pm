@@ -103,7 +103,7 @@ AnyEvent::Handle::register_read_type(
             # whippee we got 68 bytes
             undef %state;
             my $handshake = substr $_[0]{rbuf}, 0, 68, '';
-            my @payload = my @payload = unpack 'c/a* a8 H40 a20', $handshake;
+            my @payload = unpack 'c/a* a8 H40 a20', $handshake;
             $cb->( $_[0], @payload );
             return 1;
         }
@@ -117,7 +117,7 @@ AnyEvent::Handle::register_write_type(
         $string ||= '';
 
         my $len = bytes::length($type) + bytes::length($string);
-        infof "Writing $type $string ($len bytes)";
+        debugf "Writing $type $string ($len bytes)";
         return pack( "l c", $len, $type ) . $string;
     }
 );

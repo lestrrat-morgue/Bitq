@@ -34,7 +34,9 @@ sub announce {
         return { };
     } 
 
-    if ($event eq 'started') {
+    if (! defined $event) {
+        die "No event specified";
+    } elsif ($event eq 'started') {
         $self->store->record_started( {
             tracker_id => $tracker_id,
             info_hash  => $info_hash,
