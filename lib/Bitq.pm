@@ -149,19 +149,6 @@ sub start {
     return $cv;
 }
 
-sub register_peer {
-    my ($self, $handle, $host, $port) = @_;
-    my $peer = Bitq::Peer->new(
-        client  => $self,
-        host    => $host,
-        port    => $port,
-        handle  => $handle,
-    );
-use feature 'state';
-    state $FOO = {};
-    $FOO->{$peer} = $peer;
-}
-
 sub find_torrent {
     my ($self, $info_hash) = @_;
     $self->torrents->{ $info_hash };
@@ -230,23 +217,6 @@ sub announce_torrent {
             infof "Torrent incomplete. Starting a leecher peer";
             $self->start_download( $torrent, $peer );
         }
-    };
-}
-
-sub schedule_scrape {
-    my ($self, $url, $interval) = @_;
-
-    $self->scrape_urls->{$url} = AE::timer 0, $interval, sub {
-        my $uri = URI->new($url);
-        $uri->query_form(
-            # XXX 
-            map { (info_hash => $_) } keys %{ $self->torrents }
-        );
-
-        http_get $uri, sub {
-use Data::Dumper::Concise;
-warn Dumper( bdecode $_[0] );
-        };
     };
 }
 
