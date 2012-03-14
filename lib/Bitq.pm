@@ -235,3 +235,34 @@ sub start_download {
 
 
 1;
+
+__END__
+
+=head1 NAME
+
+Bitq - A BitTorrent Client
+
+=head1 SYNOPSIS
+
+    use Bitq;
+    # more to come soon
+
+=head1 DESCRIPTION
+
+Bitq is an AnyEvent-powered BitTorrent client.
+
+=head1 CLASS WALKTHROUGH
+
+=head2 Bitq
+
+Bitq is the "application". It oversees the entire operation.
+
+=head2 Bitq::Torrent
+
+Bitq::Torrent represents a torrent file. It can generate torrent file from actual data, or read a torrent and handle it
+
+=head2 Bitq::Peer
+
+Bitq::Peer is the main communication layer. It represents a bi-directional communication channel about a particular torrent.
+
+=cut
