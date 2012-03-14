@@ -2,7 +2,7 @@ use inc::Module::Install;
 
 name 'Bitq';
 
-version '1.01';
+version '0.01';
 all_from 'lib/Bitq.pm';
 
 requires 'AnyEvent';
