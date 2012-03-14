@@ -205,36 +205,7 @@ infof "seeking to %d", $offset - $sofar;
             }
         }
     }
-#    my $file = File::Spec->catfile( $self->app->work_dir, "completed", $piece->{file});
-#    open my $fh, '<', $file 
-#        or die "Could not open file $file: $!";
-#    read $fh, my $buf, $length, $piece->{offset} + $begin;
-#    close $fh;
-        
 }
-
-=head1
-
-sub generate_pieces {
-    my ($self) = @_;
-
-    my $total_size   = 0;
-    my @pieces;
-    my $fileinfo = $self->fileinfo;
-    foreach my $file (@{ $self->files }) {
-        my ($fh, $info) = $self->generate_fileinfo($file);
-        $fileinfo->{$file} = $info;
-        $total_size += $info->{length};
-        my @file_pieces = $self->generate_pieces_for_fh($fh, $file);
-        push @pieces, @file_pieces;
-        $info->{pieces} = \@pieces;
-    }
-    $self->pieces(\@pieces);
-    $self->total_size( $total_size );
-    $self->piece_count( scalar @pieces );
-}
-
-=cut
 
 sub create_metadata {
     my $self = shift;
@@ -306,7 +277,6 @@ sub generate_pieces {
     my $data   = '';
     my @pieces;
     my $piece_length = $self->piece_length;
-infof "PIECE LENGTH = %d", $piece_length;
     while ( my $file = shift @$files ) {
         open my $fh, '<', $file or die "Could not open file $file: $!";
 
@@ -318,14 +288,9 @@ infof "PIECE LENGTH = %d", $piece_length;
                 die "Failed to read from file: $!";
             }
 
-infof "read %d bytes", $n_read;
             if ( $n_read > 0 ) {
                 $sofar += $n_read;
                 if ( bytes::length($data) == $piece_length ) {
-print ">>>>\n";
-print $data, "\n";
-print Digest::SHA::sha1_hex($data), "\n";
-print "<<<<\n";
                     push @pieces, Digest::SHA::sha1($data);
                     $data = '';
                 }
@@ -335,69 +300,6 @@ print "<<<<\n";
     if ( $data ) {
         push @pieces, Digest::SHA::sha1( $data );
     }
-    return @pieces;
-}
-
-=head1
-
-sub generate_fileinfo {
-    my ($self, $file) = @_;
-    my $file_abs = ($self->dir ? File::Spec->catfile($self->dir, $file) : $file);
-
-    debugf( "Generating file info for %s", $file_abs );
-
-    # read $piece_length blocks of data at a time, and create SHA1
-    # hash for each of those
-    open my $fh, '<', $file_abs or
-        die "Failed to open $file_abs: $!";
-
-    my $size = -s $fh;
-    my $md5 = Digest::MD5->new;
-    $md5->reset;
-
-    my %fileinfo = (
-        path   => $file,
-        length => $size,
-        md5sum => do {
-            $md5->addfile($fh);
-            $md5->hexdigest;
-        }
-    );
-    return ($fh, \%fileinfo);
-}
-
-=cut
-
-sub generate_pieces_for_fh {
-    my ($self, $fh, $file) = @_;
-
-    seek $fh, 0, 0;
-
-    my $size = -s $fh;
-    my @pieces;
-    my $data = '';
-    my $sofar = 0;
-    my $piece_length = $self->piece_length;
-
-    while ( $sofar < $size ) {
-        my $n_read = read $fh, $data, $piece_length, bytes::length($data);
-        if ( ! defined $n_read ) {
-            die "Error while reading from file $file: $!";
-        }
-        if ($n_read == 0) { last }
-        $sofar += $n_read;
-
-        if (eof $fh || bytes::length($data) == $piece_length) {
-            push @pieces, {
-                file => $file,
-                size => bytes::length($data),
-                hash => Digest::SHA::sha1($data),
-                offset => $sofar,
-            };
-            $data = '';
-        }
-    }
-
     return @pieces;
 }
 
