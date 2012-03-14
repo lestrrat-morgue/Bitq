@@ -49,19 +49,6 @@ has torrent => (
     is => 'rw',
 );
 
-use constant +{
-    PACKET_HANDSHAKE             =>  1,
-
-    ST_ENCRYPTED_HANDSHAKE_ONE   =>  1,
-    ST_ENCRYPTED_HANDSHAKE_TWO   =>  2,
-    ST_ENCRYPTED_HANDSHAKE_THREE =>  3,
-    ST_ENCRYPTED_HANDSHAKE_FOUR  =>  4,
-    ST_ENCRYPTED_HANDSHAKE_FIVE  =>  5,
-    ST_PLAINTEXT_HANDSHAKE_ONE   => 11,
-    ST_PLAINTEXT_HANDSHAKE_TWO   => 12,
-    ST_PLAINTEXT_HANDSHAKE_THREE => 13,
-};
-
 # This method is for when we just accepted a connection. We wait for
 # a handshake, and serve the remote peer
 sub accept_handle {
