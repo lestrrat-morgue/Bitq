@@ -65,6 +65,10 @@ has peer_port => (
     is => 'rw'
 );
 
+has on_disconnect => (
+    is => 'rw'
+);
+
 # This method is for when we just accepted a connection. We wait for
 # a handshake, and serve the remote peer
 sub accept_handle {
@@ -80,7 +84,7 @@ sub accept_handle {
             $SELF->port,
             $_[2]
         ;
-        $SELF->disconnect();
+        $SELF->disconnect($_[2]);
     } );
     $hdl->push_read( "bittorrent.handshake", sub {
         my ($hdl, @args) = @_;
@@ -99,7 +103,7 @@ sub accept_handle {
         my $app = $self->app;
         my $torrent = $app->find_torrent( $info_hash );
         if (! $torrent) {
-            $SELF->disconnect( "No such torrent" );
+            $SELF->disconnect( "No such torrent $info_hash" );
             return;
         }
 
@@ -116,7 +120,7 @@ sub accept_handle {
                 critf "Error while sending peer ID";
             });
             $_[0]->push_write( $app->peer_id );
-            my $bitfield = $torrent->calc_bitfield( $app->work_dir );
+            my $bitfield = $torrent->bitfield();
             infof "%s sending bitfield %s to %s", 
                 $self->app->peer_id,
                 $bitfield->to_Bin,
@@ -209,7 +213,7 @@ sub start {
     } );
     $hdl->on_error( sub {
         critf "Error while waiting for handshake from peer on %s:%s", $host, $port;
-        $self->app->remove_peer( $torrent->info_hash );
+#        $self->app->remove_peer( $torrent->info_hash );
     } );
     $hdl->push_write( "bittorrent.handshake" =>
         undef, $torrent->info_hash, $self->app->peer_id );
@@ -234,7 +238,7 @@ sub handle_incoming {
             } elsif ( $type == PKT_TYPE_BITFIELD ) {
                 my $bitfield = Bit::Vector->new( $self->torrent->piece_count );
                 $bitfield->Block_Store($string);
-                infof "%s received bitfield '%s' from %s",
+                debugf "%s received bitfield '%s' from %s",
                     $self->app->peer_id,
                     $bitfield->to_Bin,
                     $self->remote_peer_id,
@@ -262,11 +266,10 @@ sub handle_unchoked {
 
     my $hdl = $self->handle;
     my $torrent = $self->torrent;
-    $torrent->calc_bitfield( $self->app->work_dir );
+    $torrent->bitfield;
     my $bitfield = $torrent->bitfield;
     if ($bitfield->is_full) {
-        my $file = File::Spec->catfile( $self->app->work_dir, $torrent->info_hash );
-        $torrent->unpack_completed( $file, $self->app->work_dir );
+        $torrent->unpack_completed( $self->app->work_dir );
         infof "%s downloaded %s (%s)",
             $self->app->peer_id,
             $torrent->name,
@@ -282,8 +285,6 @@ sub handle_unchoked {
     foreach my $index ( @pieces ) {
         next if $bitfield->bit_test($index);
         next if ! $remote->bit_test($index);
-
-        my $piece = $torrent->pieces->[$index];
 
         # If this is the last piece, then the piece length may not be the
         # same, so calculate it
@@ -302,28 +303,10 @@ sub handle_piece {
     my ($self, $index, $begin, $piece_content) = @_;
 
     my $torrent = $self->torrent;
-    my $file = File::Spec->catfile( $self->app->work_dir, $torrent->info_hash );
-    if (! -f $file ) {
-        open my $fh, '>', $file
-            or die "Failed to open $file: $!";
-        seek $fh, $torrent->total_size, SEEK_SET;
-        truncate $fh, 0;
-        close $fh;
-    }
-
-    open my $fh, '+<', $file
-        or die "Failed to open file $file: $!";
-    seek $fh, $index * $torrent->piece_length + $begin, SEEK_SET;
-    print $fh $piece_content;
-    close $fh;
-
-    debugf "Wrote to $file (%d for %d bytes)", 
-        $index * $torrent->piece_length + $begin,
-        bytes::length($piece_content)
-    ;
+    $torrent->add_piece( $index, $begin, $piece_content );
 
     # send my state
-    my $bitfield = $torrent->calc_bitfield( $self->app->work_dir );
+    my $bitfield = $torrent->bitfield;
     $self->handle->push_write( "bittorrent.packet", PKT_TYPE_BITFIELD, $bitfield->Block_Read() );
 
     # XXX Need to remember which bytes I have within this piece?
@@ -348,15 +331,17 @@ sub handle_request {
 sub disconnect {
     my ($self, $reason) = @_;
 
-    $reason ||= "(Unknown)";
     infof( "%s disconnecting peer (%s) because: %s",
         $self->app->peer_id,
         $self->remote_peer_id || 'unknown',
-        $reason || "(unknown)"
+        $reason || sprintf( "(unknown from %s %s)", (caller)[1,2] ),
     );
     $self->handle->destroy;
     $self->handle(undef);
 
+    if ( my $cb = $self->on_disconnect ) {
+        $cb->( $self );
+    }
 #        $->remove_peer( $self );
 }
 

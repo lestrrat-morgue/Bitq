@@ -6,7 +6,6 @@ use File::Basename ();
 use File::Copy();
 use File::Spec;
 use File::Temp;
-use Filesys::Notify::Simple;
 use LWP::UserAgent;
 use URI;
 
@@ -86,29 +85,24 @@ diag "Wait";
     my $found = 0;
     eval {
         alarm(30);
-
-        my $watcher = Filesys::Notify::Simple->new(\@dirs);
         do {
-            $watcher->wait( sub {
-                foreach my $event (@_) {
-                    my $dir = File::Basename::dirname($event->{path});
-                    my $file = File::Basename::basename($event->{path});
-                    next unless $file ne '100_swarm.dat';
-
-                    delete $peers{$dir};
-                }
-            } );
-        } while (keys %peers)
+            foreach my $dir (@dirs) {
+                my $file = File::Spec->catfile( $dir, "100_swarm.dat" );
+                next unless -f $file;
+                delete $peers{$dir};
+            }
+            sleep 1;
+        } while (scalar keys %peers > 0)
     };
+    alarm(0);
     if ($@) {
         fail "Error before getting files: $@";
     } else {
         is scalar keys %peers, 0, "Found all files";
     }
-    alarm(0);
 }
 
-diag "Cleanup";
+note "Cleanup";
 
 undef $master;
 undef @dirs;

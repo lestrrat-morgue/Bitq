@@ -37,237 +37,8 @@ use Fcntl qw(SEEK_END SEEK_SET);
 use File::Spec;
 use Log::Minimal;
 use Bitq::Bencode ();
-
-has parent_dir => (
-    is => 'rw',
-    default => sub { Cwd::getcwd() },
-);
-
-has source => (
-    is => 'rw',
-);
-
-has completed => (
-    is => 'rw',
-    isa => 'Bool',
-);
-
-has pieces => (
-    is => 'rw',
-);
-
-has dir => (
-    is => 'ro',
-);
-
-has files => (
-    isa => 'ArrayRef',
-    accessor => "_files",
-);
-
-has fileinfo => (
-    is => 'rw',
-    isa => 'ArrayRef',
-    default => sub { +[] }
-);
-
-has info_hash => (
-    is => 'rw'
-);
-
-has info_hash_raw => (
-    is => 'rw',
-    trigger => sub {
-        my $hash = Digest::SHA::sha1_hex( $_[1] );
-        debugf( "Detected new file info, setting hex info_hash as %s", $hash );
-        $_[0]->info_hash( $hash )
-    },
-);
-
-has name => (
-    is => 'ro',
-    required => 1,
-);
-
-has total_size => (
-    is => 'rw',
-    isa => 'Int',
-);
-
-has piece_length => (
-    is => 'ro',
-    isa => 'Int',
-    required => 1,
-    default => 2**18,
-);
-
-has piece_count => (
-    is => 'rw',
-    isa => 'Int',
-);
-
-has announce => (
-    is => 'ro',
-);
-
-has announce_list => (
-    is => 'ro',
-    default => sub { +[] }
-);
-
-has private => (
-    is => 'ro',
-    isa => 'Bool',
-    default => 0,
-);
-
-has comment => (
-    is => 'ro',
-);
-
-has merge => (
-    is => 'ro',
-    default => sub { +{} },
-);
-
-has bitfield => (
-    is => 'rw',
-);
-
-sub path_to {
-    my ($self, @components) = @_;
-    File::Spec->catfile($self->parent_dir, @components);
-}
-
-sub files {
-    my $self = shift;
-    if (@_) {
-        my $files = $_[0];
-        $files = [ sort { $a cmp $b } @$files ];
-        $self->_files($files);
-    }
-    return $self->_files;
-}
-
-sub read_piece {
-    my ($self, $i, $begin, $length) = @_;
-
-    debugf "Reading piece %d (begin %d, length %d)", $i, $begin, $length;
-    if ($self->completed ) {
-        return $self->read_piece_from_complete( $i, $begin, $length );
-    } else {
-        return $self->read_piece_from_incomplete( $i, $begin, $length );
-    }
-}
-
-sub read_piece_from_incomplete {
-
-}
-
-sub read_piece_from_complete {
-    my ($self, $i, $begin, $length) = @_;
-    my @fileinfo = @{$self->fileinfo};
-    my $offset   = $i * $self->piece_length + $begin;
-    my $sofar    = 0;
-
-    while ( 1 ) {
-        my $fileinfo = shift @fileinfo;
-        if (! $fileinfo) {
-            die "Bad read length, reached end of torrent";
-        }
-
-        $sofar += $fileinfo->{length};
-        if ($offset > $sofar) {
-            # not enough
-            debugf "Looking for offset %d, current = %d", $offset, $sofar;
-            next;
-        }
-
-
-        # sofar is at the end of current file. in order to backtrack to
-        # the corret read location, we just need to subtract the offset
-
-        my $open_fileinfo = sub {
-            my $info = shift;
-            my $file = $self->dir ?
-                File::Spec->catfile( $self->source, @{ $info->{path}} ) :
-                $self->source
-            ;
-            open my $fh, '<', $file or
-                die "Failed to open file $file: $!";
-            return $fh;
-        };
-
-        my $fh = $open_fileinfo->( $fileinfo );
-        seek $fh, $offset - $sofar, SEEK_END;
-
-        my $buf = '';
-        while (1) {
-            my $n_read = read $fh, $buf, $length, bytes::length($buf);
-            if (! defined $n_read ) {
-                die "Something very wrong while reading from file";
-            }
-
-            if ( bytes::length($buf) == $length ) {
-                return $buf;
-            }
-
-            if (! $n_read) { # eof
-                $fileinfo = shift @fileinfo;
-                if (! $fileinfo) {
-                    die "Bad read length, reached end of torrent";
-                }
-                $fh = $open_fileinfo->( $fileinfo );
-            }
-        }
-    }
-}
-
-sub create_metadata {
-    my $self = shift;
-    my %data = (
-        %{ $self->merge },
-        info => {
-            'piece length'  => $self->piece_length,
-            'pieces'        => '',
-            'name'          => $self->name,
-        },
-        'creation date' => time,
-        'created by'    => 'Bitq::Torrent/Perl',
-    );
-
-    if ($self->private) {
-        $data{info}->{private} = 1;
-    }
-    if (my $value = $self->announce) {
-        $data{announce} = $value;
-    }
-    if (my $value = $self->announce_list) {
-        if ( @$value > 0 ) {
-            $data{'announce-list'} = $value;
-        }
-    }
-    if (my $value = $self->comment) {
-        $data{comment} = $value;
-    }
-
-    my @pieces = $self->generate_pieces();
-    $self->piece_count(scalar @pieces);
-    $data{info}->{pieces} = join '', @pieces;
-    my $files = $self->files;
-    if ( @$files == 1 ) {
-        my ($fileinfo) = $self->generate_fileinfo;
-        my $file       = $files->[0];
-        $data{info}->{name} = $file;
-        $data{info}->{length} = $fileinfo->{length};
-#        $data{info}->{md5sum} = $fileinfo->{md5sum};
-    } else {
-        $data{info}->{name}  = $self->dir;
-        $data{info}->{files} = [ $self->generate_fileinfo ];
-    }
-
-    return \%data;
-}
+use Bitq::Torrent::Leeching;
+use Bitq::Torrent::Seed;
 
 sub generate_fileinfo {
     my $self = shift;
@@ -287,14 +58,11 @@ sub generate_fileinfo {
 }
 
 sub generate_pieces {
-    my $self = shift;
-    my $files = [ @{ $self->files } ];
+    my ($files, $piece_length) = @_;
 
     my $data   = '';
     my @pieces;
-    my $piece_length = $self->piece_length;
     while ( my $file = shift @$files ) {
-        $file = $self->path_to($file);
         open my $fh, '<', $file or die "Could not open file $file: $!";
 
         my $size = -s $fh;
@@ -329,27 +97,60 @@ sub compute_hash {
 }
 
 sub create_from_file {
-    my ($class, $file, @args) = @_;
+    my ($class, $file, %args) = @_;
 
     require File::Basename;
     my $file_abs = Cwd::abs_path( $file );
-    my $dir = File::Basename::dirname( $file_abs );
-    my $t = $class->new(
-        name  => File::Basename::basename( $file_abs ),
-        @args,
-        files     => [ File::Basename::basename( $file_abs ) ],
-        source    => $file_abs,
-        parent_dir => $dir,
-        total_size => -s $file_abs,
-        completed => 1,
+    my $basename = File::Basename::basename( $file_abs );
+    my $dir      = File::Basename::dirname( $file_abs );
+
+    my $piece_length  = $args{piece_length} || 2 ** 18;
+    my $name          = $args{name}         || $basename;
+    my $private       = $args{private};
+    my $announce      = $args{announce};
+    my $announce_list = $args{announce_list};
+    my $comment       = $args{comment};
+
+    my %data = (
+        info => {
+            'piece length'  => $piece_length,
+            'name'          => $name,
+            'length'        => -s $file_abs,
+        },
+        'creation date' => time,
+        'created by'    => 'Bitq::Torrent/Perl',
     );
-    $t->compute_hash;
+
+    if ($private) {
+        $data{info}->{private} = 1;
+    }
+    if ($announce) {
+        $data{announce} = $announce;
+    }
+    if ($announce_list && scalar @$announce_list > 0 ) {
+        $data{'announce-list'} = $announce_list;
+    }
+    if ($comment) {
+        $data{comment} = $comment;
+    }
+
+    my @pieces = generate_pieces([ $file_abs ], $piece_length);
+    $data{info}->{pieces} = join '', @pieces;
+
+    my $t = Bitq::Torrent::Seed->new(
+        # This is where the actual file exists
+        source_dir => $dir,
+        metadata => Bitq::Torrent::Metadata->new(unpacked => \%data),
+    );
 
     return $t;
 }
 
 sub create_from_dir {
     my ($class, $dir, @args) = @_;
+
+#        $data{info}->{name}  = $self->dir;
+#        $data{info}->{files} = [ $self->generate_fileinfo ];
 
     $dir = Cwd::abs_path($dir);
 
@@ -373,144 +174,15 @@ sub create_from_dir {
 sub load_torrent {
     my ($class, $file) = @_;
 
-    open my $fh, '<', $file or die "Could not open file $file for writing: $!";
-    my $content = do { local $/; <$fh> };
+    open my $fh, '<', $file or die "Could not open file $file for reading: $!";
+    my $data = do { local $/; <$fh> };
     close $fh;
 
-    my $hash = Bitq::Bencode::bdecode( $content );
-
-    my @files;
-    if ( exists $hash->{info}->{files} ) {
-        @files = @{ $hash->{info}->{files} };
-    } else {
-        @files = ( $hash->{info} );
-    }
-
-    my @fileinfo;
-    my $total_size = 0;
-    foreach my $file ( @files ) {
-        push @fileinfo, {
-            length => $file->{length},
-            name   => $file->{name},
-        };
-        $total_size  += $file->{length};
-    }
-
-    my @pieces;
-    {
-        my $pieces = $hash->{info}->{pieces};
-        my $length = bytes::length($pieces);
-        my $offset = 0;
-        while ( $length - $offset > 0 ) {
-            push @pieces, {
-                hash => substr $pieces, $offset, 20,
-            };
-            $offset += 20;
-        }
-    }
-    $class->new(
-        name     => "DUMMY",
-        announce => $hash->{announce},
-        info_hash_raw => $content,
-        total_size    => $total_size,
-        piece_count   => scalar @pieces,
-        piece_length  => $hash->{info}->{"piece length"},
-        pieces        => \@pieces,
-        files         => [ map { $_->{name} } @files ],
-        fileinfo      => \@fileinfo,
+    Bitq::Torrent::Leeching->new(
+        metadata => Bitq::Torrent::Metadata->new(
+            unpacked => Bitq::Bencode::bdecode($data)
+        ),
     );
-}
-
-sub write_torrent {
-    my ($self, $file) = @_;
-
-    open my $fh, '>',  $file or die "Could not open file $file for writing: $!";
-    print $fh $self->info_hash_raw;
-    close $fh;
-}
-
-sub calc_bitfield {
-    my ($self, $work_dir) = @_;
-
-    my $metadata = Bitq::Bencode::bdecode($self->info_hash_raw);
-    my $length   = $metadata->{info}->{length};
-    my $p_length = $metadata->{info}->{"piece length"};
-    my $p_count  = int($length / $p_length) + 1;
-    my $vec      = Bit::Vector->new( $p_count );
-    my $destfile = File::Spec->catfile( $work_dir, $self->info_hash );
-
-    debugf "Calculating bitfield for %s", $destfile;
-    if ( $self->completed ) {
-        $vec->Fill;
-        $self->bitfield( $vec );
-        return $vec;
-    }
-
-    my $fh;
-    if (! -f $destfile) {
-        $vec->Empty();
-        $self->bitfield( $vec );
-        return $vec;
-    }
-
-    open $fh, '<', $destfile
-        or die "Could not open $destfile: $!";
-
-    my $pieces   = $metadata->{info}->{pieces};
-    my $h_length = bytes::length($pieces);
-    my $h_offset = 0;
-    my $p_offset = 0;
-    my $v_offset = 0;
-    while ( $h_offset < $h_length ) {
-        my $hash = substr $pieces, $h_offset, 20;
-        $h_offset += 20;
-        $v_offset++;
-        debugf " + bitfield (%d)", $v_offset;
-
-        my $this_piece;
-        my $n_read = read $fh, $this_piece, $p_length;
-        debugf " + bitfield (%d): read %d bytes", $v_offset, $n_read;
-        if ($n_read) {
-            my $this_hash = Digest::SHA::sha1( $this_piece );
-            if ( $this_hash eq $hash ) {
-                debugf " + bitfield (%d): hash matches", $v_offset;
-                $vec->Bit_On( $v_offset - 1 );
-            } else {
-                debugf " + bitfield (%d): hash did not match...", $v_offset;
-            }
-        }
-    }
-
-    $self->bitfield( $vec );
-
-    return $vec;
-}
-
-sub unpack_completed {
-    my ($self, $file, $dest_dir) = @_;
-
-    my @fileinfos = @{ $self->fileinfo };
-    open my $fh, '<', $file or
-        die "Could not open file $file: $!";
-
-    foreach my $fileinfo ( @fileinfos ) {
-        my $buf;
-        my $length = $fileinfo->{length};
-        my $bufsiz = 8192;
-
-        my $dest = File::Spec->catfile($dest_dir, $fileinfo->{name});
-        open my $dest_fh, '>', $dest or
-            die "Could not open file $dest: $!";
-        while ( $length > 0 ) {
-            if ( $bufsiz > $length ) {
-                $bufsiz = $length;
-            }
-            my $n_read = read $fh, $buf, $bufsiz;
-            print $dest_fh $buf;
-            $length -= $n_read;
-        }
-        debugf "Wrote to %s", $dest;
-    }
 }
 
 1;

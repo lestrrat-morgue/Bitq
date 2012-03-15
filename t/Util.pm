@@ -12,6 +12,9 @@ BEGIN {
     if ($ENV{HARNESS_ACTIVE}) {
         if (! $ENV{ HARNESS_IS_VERBOSE } ) {
             $Log::Minimal::LOG_LEVEL = "NONE";
+            if ($ENV{ LM_COLOR }) {
+                $Log::Minimal::COLOR = 1;
+            }
         }
     }
 

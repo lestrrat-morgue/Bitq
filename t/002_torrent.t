@@ -14,7 +14,17 @@ my $torrent_file = File::Temp->new(
 );
 $torrent->write_torrent( $torrent_file->filename );
 
-{
+subtest 'read / store is equivalent' => sub {
+    my $loaded = Bitq::Torrent->load_torrent( $torrent_file );
+
+    is $loaded->info_hash, $torrent->info_hash, "info hash matches";
+    if (! is_deeply $loaded->metadata->unpacked, $torrent->metadata->unpacked, "unpacked structures match") {
+        diag explain $loaded->metadata->unpacked;
+        diag explain $torrent->metadata->unpacked;
+    }
+};
+
+subtest 'check pieces' => sub {
     $torrent_file->seek(0, 0);
     my $encoded;
     read $torrent_file, $encoded, -s $torrent_file;
@@ -38,6 +48,6 @@ $torrent->write_torrent( $torrent_file->filename );
             }
         }
     }
-}
+};
 
 done_testing;

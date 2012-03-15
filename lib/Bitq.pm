@@ -151,7 +151,8 @@ sub start {
 
 sub find_torrent {
     my ($self, $info_hash) = @_;
-    $self->torrents->{ $info_hash };
+    my $torrent = $self->torrents->{ $info_hash };
+    return $torrent;
 }
 
 sub add_torrent {
@@ -161,7 +162,7 @@ sub add_torrent {
 
     $self->torrents->{ $torrent->info_hash } = $torrent;
 
-    my $bitfield = $torrent->calc_bitfield( $self->work_dir );
+    my $bitfield = $torrent->bitfield;
     if ($bitfield->is_full) {
         infof "We have complete file";
         $self->store->record_completed( {
@@ -214,8 +215,8 @@ sub announce_torrent {
         my @peers = uncompact_ipv4($reply->{peers});
         infof "Got peers: %s", \@peers;
         # if we don't have everything completed, connect to peers
-        foreach my $peer ( @peers ) {
-            infof "Torrent incomplete. Starting a leecher peer";
+        foreach my $peer ( List::Util::shuffle(@peers) ) {
+            infof "Torrent incomplete. Starting a leecher to %s", $peer;
             $self->start_download( $torrent, $peer );
         }
     };
@@ -230,7 +231,14 @@ sub start_download {
         app     => $self,
         torrent => $torrent,
         host    => $host,
-        port    => $port
+        port    => $port,
+        on_disconnect => sub {
+            my $peer = shift;
+            if (! $peer->torrent->completed) {
+                infof "on_disconnect called";
+                $self->announce_torrent( $peer->torrent );
+            }
+        }
     );
 }
 
@@ -265,5 +273,14 @@ Bitq::Torrent represents a torrent file. It can generate torrent file from actua
 =head2 Bitq::Peer
 
 Bitq::Peer is the main communication layer. It represents a bi-directional communication channel about a particular torrent.
+
+=head1 METHODS
+
+=head2 add_torrent( $torrent, %opts )
+
+    $client->add_torrent( $torrent, on_complete => sub { ... } );
+
+    my $cv = AE::cv { warn "download done!" };
+    $client->add_torrent( $torrent, on_complete => $cv );
 
 =cut
