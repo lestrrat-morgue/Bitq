@@ -340,6 +340,7 @@ sub create_from_file {
         files     => [ File::Basename::basename( $file_abs ) ],
         source    => $file_abs,
         parent_dir => $dir,
+        total_size => -s $file_abs,
         completed => 1,
     );
     $t->compute_hash;
