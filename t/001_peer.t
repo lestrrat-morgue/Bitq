@@ -1,5 +1,6 @@
 use strict;
-use Test::More;
+use Test::More
+    skip_all => "This should be a unit test for Bitq::Peer, but unimplemented";
 use Test::TCP;
 use AnyEvent;
 use AnyEvent::Socket;
