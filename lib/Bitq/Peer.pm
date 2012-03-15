@@ -6,8 +6,9 @@ package Bitq::Peer;
 use Mouse;
 use AnyEvent::Handle;
 use Fcntl qw(SEEK_SET);
-use Bitq::Torrent;
 use Bitq::Constants qw(:packet);
+use Bitq::Protocol qw(unpack_handshake);
+use Bitq::Torrent;
 use List::Util ();
 use Log::Minimal;
 
@@ -24,6 +25,9 @@ has encryption_mode => (
 
 has handle => (
     is => 'rw',
+    trigger => sub {
+        $_[0]->prepare_handle( $_[1] ) if $_[1];
+    }
 );
 
 has 'host' => (
@@ -58,164 +62,14 @@ has on_disconnect => (
     is => 'rw'
 );
 
-# This method is for when we just accepted a connection. We wait for
-# a handshake, and serve the remote peer
-sub accept_handle {
-    my $class = shift;
-    my $self = $class->new(@_);
+sub start {}
 
-    my $SELF = $self;
-    Scalar::Util::weaken($SELF);
-    my $hdl = $self->handle;
+sub prepare_handle {
+    my ($self, $hdl) = @_;
+
     $hdl->on_error( sub {
-        critf "Peer from %s:%s had an error before handshake. %s",
-            $SELF->host,
-            $SELF->port,
-            $_[2]
-        ;
-        $SELF->disconnect($_[2]);
-    } );
-    $hdl->push_read( "bittorrent.handshake", sub {
-        my ($hdl, @args) = @_;
-
-        $hdl->on_error(undef);
-        my ($protocol, $reserved, $info_hash, $peer_id);
-        if (@args == 1) {
-            critf "Bad handshake, closing connection";
-            $SELF->disconnect( "Bad handshake" );
-            return;
-        } else {
-            ($protocol, $reserved, $info_hash, $peer_id) = @args;
-        }
-
-        debugf "Read handshake from leecher: $protocol, $reserved, $info_hash, $peer_id";
-        my $app = $self->app;
-        my $torrent = $app->find_torrent( $info_hash );
-        if (! $torrent) {
-            $SELF->disconnect( "No such torrent $info_hash" );
-            return;
-        }
-
-        $app->add_leecher( $info_hash, $self );
-        $self->torrent($torrent);
-        $self->remote_peer_id( $peer_id );
-
-        $hdl->push_write( "bittorrent.handshake", $reserved, $info_hash, $peer_id );
-        $hdl->on_drain( sub {
-            $_[0]->on_drain(undef);
-            debugf "Sent handshake to leecher %s", $peer_id;
-
-            $_[0]->on_error( sub {
-                critf "Error while sending peer ID";
-            });
-            $_[0]->push_write( $app->peer_id );
-            my $bitfield = $torrent->bitfield();
-            infof "%s sending bitfield %s to %s", 
-                $self->app->peer_id,
-                $bitfield->to_Bin,
-                $self->remote_peer_id,
-            ;
-
-            $_[0]->push_write( "bittorrent.packet", PKT_TYPE_BITFIELD, $bitfield->Block_Read() );
-            $_[0]->push_write( "bittorrent.packet", PKT_TYPE_UNCHOKE);
-
-            $self->handle_incoming();
-        } );
-        $hdl->on_error( sub {
-            critf "Error while sending handshake to leecher %s: %s", $peer_id, $_[2];
-        } );
+        critf "Socket error: %s", $_[1];
     });
-
-    return $self;
-}
-
-sub start_download {
-    my $class = shift;
-    my $self = $class->new(@_);
-
-    # This is where we connect to another peer, and ask for a file.
-    # The initialization consists of handshake sent, server checking for 
-    # appropriate info and returning a handshake.
-    #
-    # I'd rather push this logic into the peer, but it requires way too much
-    # knowledge of the entire application to check if this leecher is "correct"
-
-    my $host    = $self->host;
-    my $port    = $self->port;
-    my $torrent = $self->torrent;
-    infof "Starting to download %s at %s:%s", $torrent->info_hash, $host, $port;
-
-    my $hdl = AnyEvent::Handle->new(
-        connect => [ $host, $port ],
-        on_connect_error => sub {
-            critf "Failed to connect to %s:%s", $host, $port;
-            return;
-        },
-        on_connect => sub {
-            debugf "Connected to $host:$port";
-            my $app = $self->app;
-            $app->add_peer( $torrent->info_hash, $self );
-            $self->start();
-        }
-    );
-    $self->handle( $hdl );
-}
-
-sub start {
-    my ($self) = @_;
-
-    my $hdl = $self->handle;
-    my $app = $self->app;
-    my $host    = $self->host;
-    my $port    = $self->port;
-    my $torrent = $self->torrent;
-    $hdl->on_error( sub {
-        $_[0]->on_error(undef);
-        critf "Error while writing handshake from %s to peer on %s:%s",
-            $app->peer_id,
-            $host,
-            $port
-        ;
-    } );
-    $hdl->on_eof( sub {
-        $self->disconnect("Received EOF");
-    } );
-    $hdl->on_drain( sub {
-        $_[0]->on_drain(undef);
-        debugf "Sent handshake from %s to peer on %s:%s", $app->peer_id, $host, $port;
-        $_[0]->on_error( sub {
-            critf "Error while waiting for handshake";
-        } );
-        debugf "Waiting for handshake from %s:%s", $host, $port;
-        $_[0]->push_read( "bittorrent.handshake" => sub {
-            debugf "Read handshake from peer $host:$port";
-            $_[0]->on_error( sub {
-                critf "Error while waiting for remote peer ID";
-            } );
-            $_[0]->push_read( chunk => 20, sub {
-                my $remote_peer_id = $_[1];
-                debugf "Remote peer_id = $remote_peer_id";
-                $self->remote_peer_id( $remote_peer_id );
-                $self->handle_incoming();
-            } );
-        } );
-    } );
-    $hdl->on_error( sub {
-        critf "Error while waiting for handshake from peer on %s:%s", $host, $port;
-#        $self->app->remove_peer( $torrent->info_hash );
-    } );
-    $hdl->push_write( "bittorrent.handshake" =>
-        undef, $torrent->info_hash, $self->app->peer_id );
-
-}
-
-sub handle_incoming {
-    my $self = shift;
-    my $hdl = $self->handle;
-
-    $hdl->on_error( sub {
-        critf "Error while waiting for packet @_";
-    } );
     $hdl->on_read( sub {
         $_[0]->unshift_read( "bittorrent.packet" => sub {
             my ($hdl, $type, $string) = @_;

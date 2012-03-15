@@ -6,11 +6,12 @@ use AnyEvent::Socket ();
 use Bit::Vector;
 use File::Path ();
 use Log::Minimal;
-use Bitq::Peer;
+use Bitq::Bencode qw(bdecode);
+use Bitq::Peer::Leecher;
+use Bitq::Peer::Seeder;
+use Bitq::Protocol qw(uncompact_ipv4);
 use Bitq::Store;
 use Bitq::Tracker::PSGI;
-use Bitq::Bencode qw(bdecode);
-use Bitq::Protocol qw(uncompact_ipv4);
 
 our $VERSION;
 our $MONIKER;
@@ -133,7 +134,7 @@ sub start {
         }
 
         infof "New incoming connection from $host:$port";
-        Bitq::Peer->accept_handle(
+        Bitq::Peer::Seeder->start(
             app    => $self,
             host   => $host,
             port   => $port,
@@ -227,7 +228,7 @@ sub start_download {
 
     my ($host, $port) = split /:/, $host_port;
 
-    Bitq::Peer->start_download( 
+    Bitq::Peer::Leecher->start( 
         app     => $self,
         torrent => $torrent,
         host    => $host,
