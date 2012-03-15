@@ -49,6 +49,14 @@ has torrent => (
     is => 'rw',
 );
 
+has remote_bitfield => (
+    is => 'rw'
+);
+
+has remote_peer_id => (
+    is => 'rw'
+);
+
 has peer_host => (
     is => 'rw'
 );
@@ -97,6 +105,7 @@ sub accept_handle {
 
         $app->add_leecher( $info_hash, $self );
         $self->torrent($torrent);
+        $self->remote_peer_id( $peer_id );
 
         $hdl->push_write( "bittorrent.handshake", $reserved, $info_hash, $peer_id );
         $hdl->on_drain( sub {
@@ -108,9 +117,10 @@ sub accept_handle {
             });
             $_[0]->push_write( $app->peer_id );
             my $bitfield = $torrent->calc_bitfield( $app->work_dir );
-            infof "%s sending bitfield %s", 
+            infof "%s sending bitfield %s to %s", 
                 $self->app->peer_id,
-                $bitfield->to_Bin
+                $bitfield->to_Bin,
+                $self->remote_peer_id,
             ;
 
             $_[0]->push_write( "bittorrent.packet", PKT_TYPE_BITFIELD, $bitfield->Block_Read() );
@@ -175,7 +185,6 @@ sub start {
         ;
     } );
     $hdl->on_eof( sub {
-        critf "EOF? WTF";
         $self->disconnect("Received EOF");
     } );
     $hdl->on_drain( sub {
@@ -193,7 +202,7 @@ sub start {
             $_[0]->push_read( chunk => 20, sub {
                 my $remote_peer_id = $_[1];
                 debugf "Remote peer_id = $remote_peer_id";
-                # XXX From here on, it's an automatic thing
+                $self->remote_peer_id( $remote_peer_id );
                 $self->handle_incoming();
             } );
         } );
@@ -225,15 +234,15 @@ sub handle_incoming {
             } elsif ( $type == PKT_TYPE_BITFIELD ) {
                 my $bitfield = Bit::Vector->new( $self->torrent->piece_count );
                 $bitfield->Block_Store($string);
-                infof "%s received bitfield '%s' from %s:%s",
+                infof "%s received bitfield '%s' from %s",
                     $self->app->peer_id,
                     $bitfield->to_Bin,
-                    $self->host,
-                    $self->port,
+                    $self->remote_peer_id,
                 ;
                 if ( $bitfield->is_empty ) {
                     $self->disconnect( "Nothing to download from" );
                 }
+                $self->remote_bitfield( $bitfield );
             } elsif ( $type == PKT_TYPE_REQUEST ) {
                 my ($index, $begin, $length) = unpack "NNN", $string;
                 debugf "Received request to download piece %d (begin %d for %d)",
@@ -258,14 +267,21 @@ sub handle_unchoked {
     if ($bitfield->is_full) {
         my $file = File::Spec->catfile( $self->app->work_dir, $torrent->info_hash );
         $torrent->unpack_completed( $file, $self->app->work_dir );
-        debugf "Downloaded %s (%s)", $torrent->name, $torrent->info_hash;
+        infof "%s downloaded %s (%s)",
+            $self->app->peer_id,
+            $torrent->name,
+            $torrent->info_hash
+        ;
+        $self->disconnect( "Finished downloading" );
         return;
     }
 
     debugf "My bitfield for %s = %s", $torrent->info_hash, $bitfield->to_Bin;
     my @pieces = (0..$bitfield->Size() - 1); # List::Util::shuffle( 0 .. $bitfield->Size() - 1 ) ;
+    my $remote = $self->remote_bitfield;
     foreach my $index ( @pieces ) {
         next if $bitfield->bit_test($index);
+        next if ! $remote->bit_test($index);
 
         my $piece = $torrent->pieces->[$index];
 
@@ -279,6 +295,7 @@ sub handle_unchoked {
             pack "NNN", $index, 0, $piece_length );
         last;
     }
+
 }
 
 sub handle_piece {
@@ -305,6 +322,10 @@ sub handle_piece {
         bytes::length($piece_content)
     ;
 
+    # send my state
+    my $bitfield = $torrent->calc_bitfield( $self->app->work_dir );
+    $self->handle->push_write( "bittorrent.packet", PKT_TYPE_BITFIELD, $bitfield->Block_Read() );
+
     # XXX Need to remember which bytes I have within this piece?
     $self->handle_unchoked;
 }
@@ -328,7 +349,11 @@ sub disconnect {
     my ($self, $reason) = @_;
 
     $reason ||= "(Unknown)";
-    infof( "Disconnecting peer because: $reason" );
+    infof( "%s disconnecting peer (%s) because: %s",
+        $self->app->peer_id,
+        $self->remote_peer_id || 'unknown',
+        $reason || "(unknown)"
+    );
     $self->handle->destroy;
     $self->handle(undef);
 

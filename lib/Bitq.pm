@@ -158,6 +158,7 @@ sub add_torrent {
     my ($self, $torrent) = @_;
 
     infof "Adding torrent with hash %s", $torrent->info_hash;
+
     $self->torrents->{ $torrent->info_hash } = $torrent;
 
     my $bitfield = $torrent->calc_bitfield( $self->work_dir );

@@ -16,22 +16,23 @@ sub new_tempdir {
 }
 
 my $dir = new_tempdir();
+my $target_file = File::Spec->catfile( $dir, "100_swarm.dat" );
+{
+    open my $fh, '>', $target_file or die "Could not open $target_file: $!";
+    for (1..10_000) {
+        print $fh "0123456789";
+    }
+    close $fh;
+}
+
 
 my $torrent = Bitq::Torrent->create_from_file(
-    __FILE__,
-    piece_length => 100,
+    $target_file,
+    piece_length => 512,
     announce     => 'http://127.0.0.1:13209/announce.pl',
 );
 
-{
-    my $dest = File::Spec->catfile( $dir, "completed", File::Basename::basename( __FILE__ ) );
-    my $source = __FILE__;
-
-    note "Copying $source to $dest";
-    File::Path::make_path( File::Basename::dirname( $dest ) ) ;
-    File::Copy::copy($source, $dest) or die "Could not copy";
-    $torrent->write_torrent( "test.torrent" );
-}
+$torrent->write_torrent( "test.torrent" );
 
 my $master = Test::TCP->new( code => sub {
     my $port = shift;
@@ -53,29 +54,16 @@ my $master = Test::TCP->new( code => sub {
 
 } );
 
-subtest 'check tracker sanity' => sub {
-    my $url = URI->new(sprintf "http://127.0.0.1:13209/announce.pl", $master->port);
-    $url->query_form( {
-        event => "started",
-        info_hash => 'DUMMY',
-        peer_id => 'DUMMY',
-        key => 'DUMMY',
-    } );
-    my $ua = LWP::UserAgent->new;
-    my $res = $ua->get( $url );
-    if (! ok $res->is_success(), "GET tracker url is successful") {
-        diag $res->as_string;
-    }
-};
-
 note "Starting leechers";
 my @dirs;
-my @peers;
+my %peers;
 foreach my $i ( 1..2 ) {
     note "Starting leecher $i";
     my $dir = new_tempdir();
+
+    ok ! -f File::Spec->catfile($dir, "100_swarm.dat"), "Downloaded file does not exist";
     push @dirs, $dir;
-    push @peers, Test::TCP->new( code => sub {
+    $peers{ $dir } = Test::TCP->new( code => sub {
         my $port = shift;
         my $torrent = Bitq::Torrent->load_torrent( "test.torrent" );
 
@@ -99,12 +87,15 @@ diag "Wait";
         alarm(10);
         CHECK: {
             $found = 0;
-            foreach my $path ( map { "$_/100_swarm.t" } @dirs ) {
+            foreach my $dir ( @dirs ) {
+                my $path = File::Spec->catfile($_, "100_swarm.t");
                 if (-f $path) {
+                    delete $peers{ $dir };
+diag explain \%peers;
                     $found++;
                 }
             }
-            if ( $found != @peers ) {
+            if ( $found != @dirs ) {
                 redo CHECK;
             }
         }
@@ -112,7 +103,7 @@ diag "Wait";
     if ($@) {
         fail "Error before getting files: $@";
     } else {
-        is $found, scalar @peers, "Found all files";
+        is $found, scalar @dirs, "Found all files";
     }
     alarm(0);
 }
@@ -120,6 +111,6 @@ diag "Wait";
 diag "Cleanup";
 
 undef $master;
-undef @peers;
+undef @dirs;
 
 done_testing;

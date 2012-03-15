@@ -41,7 +41,7 @@ sub setup_database {
 CREATE TABLE IF NOT EXISTS peers (
     peer_id    VARBINARY(20) NOT NULL PRIMARY KEY,
     address    VARCHAR(15) NOT NULL,
-    port       INT NOT NULL DEFAULT 6881,
+    port       INT NOT NULL, /*  DEFAULT 6881, */
     uploaded   INT NOT NULL DEFAULT 0,
     downloaded INT NOT NULL DEFAULT 0,
     created_on INTEGER NOT NULL
