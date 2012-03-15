@@ -57,7 +57,7 @@ my $master = Test::TCP->new( code => sub {
 note "Starting leechers";
 my @dirs;
 my %peers;
-foreach my $i ( 1..2 ) {
+foreach my $i ( 1..10 ) {
     note "Starting leecher $i";
     my $dir = new_tempdir();
 
