@@ -15,5 +15,8 @@ requires 'Digest::SHA';
 requires 'SQL::Maker';
 requires 'Mouse';
 requires 'Log::Minimal';
+requires 'Twiggy'; # Want to remove hard dep later...
+
+test_requires 'Filesys::Notify::Simple';
 
 WriteAll;

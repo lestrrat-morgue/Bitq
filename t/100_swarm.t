@@ -6,6 +6,7 @@ use File::Basename ();
 use File::Copy();
 use File::Spec;
 use File::Temp;
+use Filesys::Notify::Simple;
 use LWP::UserAgent;
 use URI;
 
@@ -84,26 +85,25 @@ diag "Wait";
     local $SIG{ALRM} = sub { die "TiMeOuT" };
     my $found = 0;
     eval {
-        alarm(10);
-        CHECK: {
-            $found = 0;
-            foreach my $dir ( @dirs ) {
-                my $path = File::Spec->catfile($_, "100_swarm.t");
-                if (-f $path) {
-                    delete $peers{ $dir };
-diag explain \%peers;
-                    $found++;
+        alarm(30);
+
+        my $watcher = Filesys::Notify::Simple->new(\@dirs);
+        do {
+            $watcher->wait( sub {
+                foreach my $event (@_) {
+                    my $dir = File::Basename::dirname($event->{path});
+                    my $file = File::Basename::basename($event->{path});
+                    next unless $file ne '100_swarm.dat';
+
+                    delete $peers{$dir};
                 }
-            }
-            if ( $found != @dirs ) {
-                redo CHECK;
-            }
-        }
+            } );
+        } while (keys %peers)
     };
     if ($@) {
         fail "Error before getting files: $@";
     } else {
-        is $found, scalar @dirs, "Found all files";
+        is scalar keys %peers, 0, "Found all files";
     }
     alarm(0);
 }
